@@ -11,14 +11,14 @@
 
 import { useCollaborationContext } from '@lexical/react/LexicalCollaborationContext';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
+import { initLocalState, syncLexicalUpdateToYjs, TOGGLE_CONNECT_COMMAND, setLocalStateFocus, createUndoManager, CONNECTED_COMMAND, syncCursorPositions, syncYjsChangesToLexical, createBinding } from '@lexical/yjs';
 import * as React from 'react';
-import { useRef, useState, useMemo, useCallback, useEffect } from 'react';
+import { useRef, useCallback, useEffect, useMemo, useState } from 'react';
 import { mergeRegister } from '@lexical/utils';
-import { createBinding, initLocalState, syncLexicalUpdateToYjs, TOGGLE_CONNECT_COMMAND, setLocalStateFocus, createUndoManager, CONNECTED_COMMAND, syncCursorPositions, syncYjsChangesToLexical } from '@lexical/yjs';
 import { COMMAND_PRIORITY_EDITOR, FOCUS_COMMAND, BLUR_COMMAND, UNDO_COMMAND, REDO_COMMAND, CAN_UNDO_COMMAND, CAN_REDO_COMMAND, $getRoot, $createParagraphNode, $getSelection } from 'lexical';
 import { createPortal } from 'react-dom';
 import { UndoManager } from 'yjs';
-import { jsx } from 'react/jsx-runtime';
+import { jsx, Fragment } from 'react/jsx-runtime';
 
 /**
  * Copyright (c) Meta Platforms, Inc. and affiliates.
@@ -28,7 +28,7 @@ import { jsx } from 'react/jsx-runtime';
  *
  */
 
-function useYjsCollaboration(editor, id, provider, docMap, name, color, shouldBootstrap, cursorsContainerRef, initialEditorState, excludedProperties, awarenessData, binding, setDoc) {
+function useYjsCollaboration(editor, id, provider, docMap, name, color, shouldBootstrap, binding, setDoc, cursorsContainerRef, initialEditorState, awarenessData) {
   const isReloadingDoc = useRef(false);
   const connect = useCallback(() => {
     provider.connect();
@@ -106,7 +106,7 @@ function useYjsCollaboration(editor, id, provider, docMap, name, color, shouldBo
       docMap.delete(id);
       removeListener();
     };
-  }, [binding, color, connect, disconnect, docMap, editor, id, initialEditorState, name, provider, shouldBootstrap, awarenessData]);
+  }, [binding, color, connect, disconnect, docMap, editor, id, initialEditorState, name, provider, shouldBootstrap, awarenessData, setDoc]);
   const cursorsContainer = useMemo(() => {
     const ref = element => {
       binding.cursorsContainer = element;
@@ -132,7 +132,7 @@ function useYjsCollaboration(editor, id, provider, docMap, name, color, shouldBo
       return true;
     }, COMMAND_PRIORITY_EDITOR);
   }, [connect, disconnect, editor]);
-  return [cursorsContainer, binding];
+  return cursorsContainer;
 }
 function useYjsFocusTracking(editor, provider, name, color, awarenessData) {
   useEffect(() => {
@@ -286,6 +286,8 @@ function CollaborationPlugin({
   excludedProperties,
   awarenessData
 }) {
+  const isBindingInitialized = useRef(false);
+  const isProviderInitialized = useRef(false);
   const collabContext = useCollaborationContext(username, cursorColor);
   const {
     yjsDocMap,
@@ -305,37 +307,67 @@ function CollaborationPlugin({
   }, [collabContext, editor]);
   const [provider, setProvider] = useState();
   useEffect(() => {
+    if (isProviderInitialized.current) {
+      return;
+    }
+    isProviderInitialized.current = true;
     const newProvider = providerFactory(id, yjsDocMap);
     setProvider(newProvider);
-
     return () => {
       newProvider.disconnect();
-    }
-  }, [id, providerFactory, yjsDocMap])
-
+    };
+  }, [id, providerFactory, yjsDocMap]);
   const [doc, setDoc] = useState(yjsDocMap.get(id));
   const [binding, setBinding] = useState();
   useEffect(() => {
-    const newBinding = createBinding(editor, provider, id, doc ?? yjsDocMap.get(id), yjsDocMap, excludedProperties)
+    if (!provider) {
+      return;
+    }
+    if (isBindingInitialized.current) {
+      return;
+    }
+    isBindingInitialized.current = true;
+    const newBinding = createBinding(editor, provider, id, doc || yjsDocMap.get(id), yjsDocMap, excludedProperties);
     setBinding(newBinding);
-
     return () => {
       newBinding.root.destroy(newBinding);
-    }
-  }, [editor, provider, id, yjsDocMap, doc, excludedProperties])
-
-  if(!provider || !binding) return null;
-
-  return React.createElement(WrapWithProvider, {
-      editor, id, provider, yjsDocMap, name, color, shouldBootstrap, cursorsContainerRef, initialEditorState, excludedProperties, awarenessData,
-collabContext, binding, setDoc
-  })
+    };
+  }, [editor, provider, id, yjsDocMap, doc, excludedProperties]);
+  if (!provider || !binding) {
+    return /*#__PURE__*/jsx(Fragment, {});
+  }
+  return /*#__PURE__*/jsx(YjsCollaborationCursors, {
+    awarenessData: awarenessData,
+    binding: binding,
+    collabContext: collabContext,
+    color: color,
+    cursorsContainerRef: cursorsContainerRef,
+    editor: editor,
+    id: id,
+    initialEditorState: initialEditorState,
+    name: name,
+    provider: provider,
+    setDoc: setDoc,
+    shouldBootstrap: shouldBootstrap,
+    yjsDocMap: yjsDocMap
+  });
 }
-
-function WrapWithProvider ({
-      editor, id, provider, yjsDocMap, name, color, shouldBootstrap, cursorsContainerRef, initialEditorState, excludedProperties, awarenessData, collabContext, binding, setDoc
-  }) {
-  const [cursors] = useYjsCollaboration(editor, id, provider, yjsDocMap, name, color, shouldBootstrap, cursorsContainerRef, initialEditorState, excludedProperties, awarenessData, binding, setDoc);
+function YjsCollaborationCursors({
+  editor,
+  id,
+  provider,
+  yjsDocMap,
+  name,
+  color,
+  shouldBootstrap,
+  cursorsContainerRef,
+  initialEditorState,
+  awarenessData,
+  collabContext,
+  binding,
+  setDoc
+}) {
+  const cursors = useYjsCollaboration(editor, id, provider, yjsDocMap, name, color, shouldBootstrap, binding, setDoc, cursorsContainerRef, initialEditorState, awarenessData);
   collabContext.clientID = binding.clientID;
   useYjsHistory(editor, binding);
   useYjsFocusTracking(editor, provider, name, color, awarenessData);
